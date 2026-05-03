@@ -1,0 +1,19 @@
+{
+  "name": "steam-session-tracker",
+  "version": "1.0.0",
+  "description": "Steam session tracker - polling phase",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "ts-node": "^10.0.0",
+    "typescript": "^5.0.0"
+  }
+}
