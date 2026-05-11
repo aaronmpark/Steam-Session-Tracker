@@ -2,43 +2,69 @@ import "dotenv/config";
 import { fetchPlayerStatus } from "./steamApi";
 import { SessionManager, formatDuration, recoverOrphanedSession } from "./sessionManager";
 import { CompletedSession } from "./types";
+import {
+  initDatabase,
+  saveSession,
+  getAllSessions,
+  getStatsPerGame,
+} from "./database";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const STEAM_API_KEY = process.env.STEAM_API_KEY;
 const STEAM_ID      = process.env.STEAM_ID;
-const POLL_INTERVAL = 10_000; // 10 seconds in ms
+const POLL_INTERVAL = 30_000;
 
 if (!STEAM_API_KEY || !STEAM_ID) {
   console.error("❌ Missing STEAM_API_KEY or STEAM_ID in .env file");
   process.exit(1);
 }
 
-// ─── Session log (in-memory for now — will move to DB in Phase 3) ────────────
+// ─── Session handling ─────────────────────────────────────────────────────────
 
-const sessionLog: CompletedSession[] = [];
-
-function logSession(session: CompletedSession): void {
-  sessionLog.push(session);
+function handleCompletedSession(session: CompletedSession): void {
+  const id = saveSession(session);
+  console.log(`\n💾 Session saved to local database (id: ${id})`);
   printSessionLog();
 }
 
 function printSessionLog(): void {
-  console.log("\n─────────────────────────────────────────");
-  console.log("📋 Session Log");
-  console.log("─────────────────────────────────────────");
+  const sessions = getAllSessions();
+  const stats    = getStatsPerGame();
 
-  if (sessionLog.length === 0) {
+  console.log("\n─────────────────────────────────────────────────────");
+  console.log("📋 Session Log (all time)");
+  console.log("─────────────────────────────────────────────────────");
+
+  if (sessions.length === 0) {
     console.log("   No sessions recorded yet.");
   } else {
-    sessionLog.forEach((s, i) => {
+    sessions.slice(0, 10).forEach((s, i) => {
+      const date   = new Date(s.started_at).toLocaleDateString();
+      const time   = new Date(s.started_at).toLocaleTimeString();
+      const synced = s.synced_to_cloud ? "☁️" : "💾";
       console.log(
-        `   ${i + 1}. ${s.gameName.padEnd(30)} ${formatDuration(s.durationSeconds).padStart(12)}` +
-        `   (${s.startedAt.toLocaleDateString()} ${s.startedAt.toLocaleTimeString()})`
+        `   ${String(i + 1).padStart(2)}. ${synced} ${s.game_name.padEnd(28)} ` +
+        `${formatDuration(s.duration_s).padStart(12)}   ${date} ${time}`
+      );
+    });
+    if (sessions.length > 10) console.log(`   ... and ${sessions.length - 10} more`);
+  }
+
+  if (stats.length > 0) {
+    console.log("\n📊 Per-Game Totals");
+    console.log("─────────────────────────────────────────────────────");
+    stats.forEach((g) => {
+      console.log(
+        `   ${g.game_name.padEnd(28)} ` +
+        `${String(g.session_count).padStart(3)} sessions   ` +
+        `total: ${formatDuration(g.total_seconds).padStart(12)}   ` +
+        `avg: ${formatDuration(Math.floor(g.avg_seconds))}`
       );
     });
   }
-  console.log("─────────────────────────────────────────\n");
+
+  console.log("─────────────────────────────────────────────────────\n");
 }
 
 // ─── Poll tick ────────────────────────────────────────────────────────────────
@@ -47,10 +73,8 @@ const manager = new SessionManager();
 
 async function poll(): Promise<void> {
   const timestamp = new Date().toLocaleTimeString();
-
   try {
     const player = await fetchPlayerStatus(STEAM_API_KEY!, STEAM_ID!);
-
     if (!player) return;
 
     const current = manager.getCurrentSession();
@@ -65,9 +89,7 @@ async function poll(): Promise<void> {
     }
 
     const completed = manager.processPoll(player);
-    if (completed) {
-      logSession(completed);
-    }
+    if (completed) handleCompletedSession(completed);
 
   } catch (err) {
     console.error(`[${timestamp}] ⚠️  Poll error:`, (err as Error).message);
@@ -78,17 +100,19 @@ async function poll(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log("╔════════════════════════════════════════╗");
-  console.log("║      Steam Session Tracker v0.1        ║");
+  console.log("║      Steam Session Tracker v0.2        ║");
   console.log("╚════════════════════════════════════════╝");
   console.log(`\n🔑 Steam ID : ${STEAM_ID}`);
   console.log(`⏱️  Polling  : every ${POLL_INTERVAL / 1000}s`);
-  console.log(`\nStarting poller... (Ctrl+C to stop)\n`);
 
-  // Check for a crashed session from a previous run
+  await initDatabase();
+
   const recovered = recoverOrphanedSession();
-  if (recovered) logSession(recovered);
+  if (recovered) handleCompletedSession(recovered);
 
-  // Run immediately, then on interval
+  printSessionLog();
+
+  console.log("Starting poller... (Ctrl+C to stop)\n");
   await poll();
   setInterval(poll, POLL_INTERVAL);
 }
@@ -98,7 +122,7 @@ async function main(): Promise<void> {
 process.on("SIGINT", () => {
   console.log("\n\n👋 Shutting down...");
   printSessionLog();
-  console.log("Note: If a session was active, it will be recovered on next launch.");
+  console.log("Sessions are safely stored in sessions.db");
   process.exit(0);
 });
 
